@@ -1,13 +1,17 @@
 # -*- encoding: utf-8 -*-
-
-from bs4 import BeautifulSoup
-from selenium import webdriver
-from selenium.webdriver.common.keys import Keys
 import os
 import json
 import time
 import requests
-import pickle
+import pandas as pd
+
+from bs4 import BeautifulSoup
+from datetime import datetime
+from selenium import webdriver
+from selenium.webdriver.common.keys import Keys
+
+from data_process import get_root_index, get_pages_from_chunks
+
 
 class Wolai():
 
@@ -33,8 +37,13 @@ class Wolai():
         # browser_options.add_argument('--disable-gpu')
         # self.browser = webdriver.Firefox(firefox_options=browser_options)
         self.driver = webdriver.Edge("msedgedriver.exe")
-        self.userAgent = self.driver.execute_script("return navigator.userAgent;")
-        print(self.userAgent)
+
+        self.header = {
+            "Content-Type": "application/json;charset=UTF-8",
+            "Cookie": "token=" + self.token,
+            "Connection": "close",
+            "User-Agent": self.driver.execute_script("return navigator.userAgent;")
+        }
 
 
     def element_exist(self, tag='div', element={'id': 'pre-loading-mask'}):
@@ -93,9 +102,11 @@ class Wolai():
 
             print(self.token)
 
+
     def save_cookie(self, path):
         with open(path, 'w') as filehandler:
             json.dump(self.driver.get_cookies(), filehandler)
+
 
     def load_cookie(self, path):
         with open(path, 'r') as cookiesfile:
@@ -110,6 +121,85 @@ class Wolai():
                                 'path': '/', 
                                 'name': 'token', 
                                 'value': self.token})
+
+        print(f"The cookie will expire at {datetime.utcfromtimestamp(cookie['expiry']).strftime('%Y-%m-%d %H:%M:%S')}")
+
+    ###########################
+    # Fetch data by html.post #
+    ###########################
+    def get_user_data(self):
+        url = "https://api.wolai.com/v1/transaction/getUserData"
+
+        r = requests.post(url, headers=self.header)
+
+        if r.status_code == 200:
+            return json.loads(r.text)
+        else:
+            return False
+
+    def get_page_chunks(self, page_id):
+        url = 'https://api.wolai.com/v1/transaction/getPageChunks'
+
+        post_data = {
+            "pageId": page_id,
+            "chunkNumber": 0,
+            "limit": 300,
+            "position": {"stack": []}
+        }
+
+        time.sleep(1)
+
+        r = requests.post(url, data=json.dumps(post_data), headers=self.header)
+        # 跑多了之后，会出来这样的错误
+        """  
+        File "main.py", line 178, in iter_page
+            self.iter_page(pid, level=level+4)
+        File "main.py", line 170, in iter_page
+            getPageChunks = self.get_page_chunks(page_id)
+        File "main.py", line 152, in get_page_chunks
+            r = requests.post(url, data=json.dumps(post_data), headers=self.header)
+        File "C:\ProgramData\Anaconda3\envs\lab\lib\site-packages\requests\api.py", line 119, in post
+            return request('post', url, data=data, json=json, **kwargs)
+        File "C:\ProgramData\Anaconda3\envs\lab\lib\site-packages\requests\api.py", line 61, in request
+            return session.request(method=method, url=url, **kwargs)
+        File "C:\ProgramData\Anaconda3\envs\lab\lib\site-packages\requests\sessions.py", line 542, in request
+            resp = self.send(prep, **send_kwargs)
+        File "C:\ProgramData\Anaconda3\envs\lab\lib\site-packages\requests\sessions.py", line 655, in send
+            r = adapter.send(request, **kwargs)
+        File "C:\ProgramData\Anaconda3\envs\lab\lib\site-packages\requests\adapters.py", line 498, in send
+            raise ConnectionError(err, request=request)
+        requests.exceptions.ConnectionError: ('Connection aborted.', OSError(0, 'Error'))
+        """
+
+        if r.status_code == 200:
+            return json.loads(r.text)
+        else:
+            return False
+
+
+    def get_all_page_info(self):
+        getUserData = self.get_user_data()
+        self.workspace, self.pages = get_root_index(getUserData)
+
+        for pid in self.pages.id.values:
+            print(f"-> {pid}-{self.pages[self.pages.id == pid].name.values[0]}")
+            self.iter_page(pid)
+
+
+    def iter_page(self, page_id, level=0):
+        getPageChunks = self.get_page_chunks(page_id)
+        child_pages = get_pages_from_chunks(getPageChunks, self.workspace)
+        
+        for pid in child_pages.id.values:
+            current_record = child_pages[child_pages.id == pid]
+            if pid not in self.pages.id.values:
+                self.pages = pd.concat([self.pages, current_record])
+                print(f"{' '*(level+4)}-> {pid}-{child_pages[child_pages.id == pid].name.values[0]}")
+                self.iter_page(pid, level=level+4)
+            else:
+                #print(f"{' '*(level+4)}[] {pid}-{child_pages[child_pages.id == pid].name.values[0]}")
+                continue
+
 
     def get_menu_tree_page(self):
         soup = self.get_soup()
@@ -159,10 +249,15 @@ class Wolai():
 
 if __name__ == '__main__':
 
-    wolai = Wolai('userinfo.txt', 'backup')
+    wolai = Wolai('userinfo.txt', 'backup', close_tab=True)
 
-    wolai.login()
+    #wolai.login()
+    wolai.get_all_page_info()
 
-    pages = wolai.get_menu_tree_page()
+    print(wolai.pages)
 
-    print(pages)
+    wolai.pages.to_csv('backup/pages.csv')
+
+    #pages = wolai.get_menu_tree_page()
+
+    #print(pages)

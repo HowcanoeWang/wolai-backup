@@ -1,3 +1,5 @@
 userinfo.txt
 *.exe
 backup/*
+test_data/*
+__pycache__/*
