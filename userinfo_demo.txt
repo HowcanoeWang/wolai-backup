@@ -1,1 +1,1 @@
-{"username": "xxx", "password": "xxx", "namesapce": "xxx"}
+{"username": "xxx", "password": "xxx", "namesapce": "xxx", "token": "xxx"}
